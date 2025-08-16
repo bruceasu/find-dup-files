@@ -1,210 +1,211 @@
 package me.asu.fdf;
 
-import me.asu.fdf.dao.DataSourceFactory;
-import me.asu.fdf.dao.FileIndexDao;
-import me.asu.fdf.model.FileInfo;
-import me.asu.fdf.util.GetOpt;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Types;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Consumer;
 import me.asu.log.Log;
-import org.h2.util.StringUtils;
 
-import java.io.*;
-import java.text.SimpleDateFormat;
-import java.util.*;
-
-import static me.asu.fdf.util.StringUtils.formatSizeForReadBy1024;
-
+/**
+ * ========================= Database =========================
+ */
 public class DB {
+    // SQLite 压缩数据库文件的方法：
+    // 一、最标准、最推荐：
+    // sqlite3 cache.db "VACUUM;"
+    // 二、空间不足时：VACUUM INTO（更安全）
+    // sqlite3 cache.db "VACUUM INTO 'cache_compact.db';"
+    // mv cache_compact.db cache.db
+    // 三、轻量整理（不一定缩文件）：PRAGMA optimize;
+    // sqlite3 cache.db "PRAGMA optimize;"
+    // 四、减少“以后再膨胀”的配置（强烈建议）
+    // 这是你这种长期跑 scan / report / verify 的工具必须做的。
+    // 1️⃣ 启用 WAL + auto_vacuum
+    // PRAGMA journal_mode = WAL;
+    // PRAGMA auto_vacuum = INCREMENTAL;
+    // ⚠️ auto_vacuum 只在建库前生效
+    // 如果你已经有库，需要：
+    // sqlite3 cache.db "PRAGMA auto_vacuum=INCREMENTAL; VACUUM;"
+    // （这一步会重写一次）
+    // 2️⃣ 以后“渐进回收”而不是一次性 VACUUM
+    // sqlite3 cache.db "PRAGMA incremental_vacuum(200);"
+    // 五、针对你 Dedup 工具的“最佳实践方案”
+    // sqlite3 cache.db "VACUUM INTO 'cache_new.db';"
+    // 第一次（或数据库明显变大时）
+    // mv cache_new.db cache.db
+    // 并初始化：
+    // sqlite3 cache.db "
+    //PRAGMA journal_mode=WAL;
+    //PRAGMA auto_vacuum=INCREMENTAL;
+    //"
+    // 六、如何判断“需不需要 VACUUM”
+    // sqlite3 cache.db "PRAGMA freelist_count;"
+    // - 返回值很大（几千 / 几万页）
+    // - 且 DB 文件明显大于预期
+    // - 👉 该 VACUUM 了
+    // 七、给你一个“最小记忆版总结”
+    // > SQLite 压缩 = VACUUM
+    // - 想一次压到最小：VACUUM
+    // - 想安全一点：VACUUM INTO
+    // - 想长期稳定：auto_vacuum=INCREMENTAL + incremental_vacuum
 
-    private static Map<String, String> description = new HashMap<String, String>() {{
-        put("-r", "Delete an item by file_path");
-        put("-h", "Print this message.");
-        put("-l", "List the tables.");
-        put("-p", "The file path");
-        put("-s", "Show table items");
-        put("-d", "Drop table");
-        put("-t", "The tableName");
-        put("-v", "Verbose");
-        put("-x", "The file path is a pattern");
-        put("-c", "Clean dup file index");
-        put("-C", "COMPACT");
-    }};
 
-    public static void main(String[] args) throws IOException {
-        String options = "hlsdp:t:xvcC";
-        GetOpt getOpt = new GetOpt(args, options);
-        int c;
-        String path = null, tableName = null;
-        boolean verbose = false, del = false, st = false, drop = false, compact = false,
-                pathIsPattern = false, lt = false, toClean = false;
-        while ((c = getOpt.getNextOption()) != -1) {
-            switch (c) {
-                case 'h':
-                    getOpt.printUsage("DB", description);
-                    System.exit(0);
-                    break;
-                case 'p': path = getOpt.getOptionArg();break;
-                case 't': tableName = getOpt.getOptionArg();break;
-                case 'v': verbose = true;break;
-                case 'r': del = true;break;
-                case 'd': drop = true;break;
-                case 'x': pathIsPattern = true;break;
-                case 's': st = true;break;
-                case 'l': lt = true;break;
-                case 'c': toClean = true;break;
-                case 'C': compact = true;break;
+    public static String getDefaultDbPath() {
+        Path p = Paths.get(System.getProperty("user.home"), ".local", "share", "fdf.file-index");
+        Path parent = p.getParent();
+        if (!Files.isDirectory(parent)) {
+            try {
+                Files.createDirectories(parent);
+            } catch (IOException e) {
+                Log.error("Failed to create directory: " + parent);
             }
         }
-
-        setVerbose(verbose);
-
-        if (lt) listTables();
-        if (st) showTable(tableName, path, pathIsPattern);
-        if (del) delete(tableName, path, pathIsPattern);
-        if (toClean) removeDupIndex(tableName);
-        if (drop) dropTable(tableName);
-        if (compact) DataSourceFactory.compact();
+        return p.toString();
     }
 
-    private static void dropTable(String tableName) {
-        Objects.requireNonNull(tableName);
-        DataSourceFactory.drop(tableName);
+    public static Connection connect(String dbPath) throws SQLException {
+        if (dbPath == null || dbPath.isEmpty()) {
+            throw new IllegalArgumentException("Database path is null or empty");
+        }
+        Connection c = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+        c.setAutoCommit(false);
+        return c;
     }
 
-    private static void removeDupIndex(String tableName) {
-        Objects.requireNonNull(tableName);
-        FileIndexDao dao = new FileIndexDao();
-        dao.removeDupIndex(tableName);
-    }
+    public static void createTable(Connection connection) 
+    throws IOException, SQLException {
+        // classpath:databases.sql => String
+        StringBuilder sb = new StringBuilder();
+        ClassLoader cl = DB.class.getClassLoader();
+        try (InputStream in = cl.getResourceAsStream("database.sql")) {
 
-    private static void delete(String tableName, String path, boolean pathIsPattern) {
-        Objects.requireNonNull(tableName);
-        Objects.requireNonNull(path);
-        FileIndexDao dao = new FileIndexDao();
-        if (pathIsPattern) {
-            List<FileInfo> fileInfos = dao.loadTable(tableName);
-            if (fileInfos == null || fileInfos.isEmpty()) {
-                System.out.println("There's no items in " + tableName);
-                return;
+            if (in == null) throw new RuntimeException("database.sql script can't load please check it.");
+
+            try (Reader r = new InputStreamReader(in, "UTF-8"); 
+                    BufferedReader reader = new BufferedReader(r)) {
+                String line = null;
+                while ((line = reader.readLine()) != null)
+                    sb.append(line).append("\n"); 
             }
-            Iterator<FileInfo> iterator = fileInfos.iterator();
-            while (iterator.hasNext()) {
-                FileInfo fi = iterator.next();
-                if (fi.getFilePath().matches(path)) {
-                    dao.delete(tableName, fi.getFilePath());
-                }
-            }
-        } else {
-            dao.delete(tableName, path);
+      
+        }
+              
+        String sql = sb.toString();
+
+        try (PreparedStatement statement = connection.prepareStatement(sql);) {
+            statement.executeUpdate();
         }
     }
-
-    private static void showTable(String tableName, String path, boolean pathIsPattern) throws IOException {
-        Objects.requireNonNull(tableName);
-        FileIndexDao dao = new FileIndexDao();
-        List<FileInfo> fileInfos = dao.loadTable(tableName);
-        if (fileInfos == null || fileInfos.isEmpty()) {
-            System.out.println("There's no items in " + tableName);
-            return;
+    
+    public static void initDb(Connection c) throws SQLException {
+        try (Statement st = c.createStatement()) {
+            st.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS file_fp (
+                        path TEXT PRIMARY KEY,
+                        size INTEGER NOT NULL,
+                        mtime INTEGER NOT NULL,
+                        quick_hash TEXT,
+                        full_hash TEXT,
+                        source_disk TEXT,
+                        group_id INTEGER,
+                        updated_at INTEGER NOT NULL
+                        );
+                    """);
+            st.executeUpdate(
+                    "CREATE INDEX IF NOT EXISTS idx_size_qh ON file_fp(size, quick_hash);");
+            st.executeUpdate("CREATE INDEX IF NOT EXISTS idx_group ON file_fp(group_id);");
+            st.executeUpdate("CREATE INDEX IF NOT EXISTS idx_fullhash ON file_fp(full_hash);");
         }
-        if (!StringUtils.isNullOrEmpty(path)) {
-            Iterator<FileInfo> iterator = fileInfos.iterator();
-            while (iterator.hasNext()) {
-                FileInfo fi = iterator.next();
-                if (pathIsPattern) {
-                    if (!fi.getFilePath().contains(path)) iterator.remove();
-                } else {
-                    if (!path.equals(fi.getFilePath())) iterator.remove();
-                }
-            }
-        }
-        int i = 0;
-        System.out.println();
-        String fmt = "yyyy-MM-dd HH:mm:ss";
-        SimpleDateFormat sdf = new SimpleDateFormat(fmt);
-        int pageSize = 20;
-        do {
-            int j = i + pageSize;
-            if (j > fileInfos.size()) j = fileInfos.size();
-            List<FileInfo> ls = fileInfos.subList(i, j);
-            // file_path, last_modified, file_size, md5sum
-            int colSize[] = new int[]{10, fmt.length(), 9, 32};
-            for (FileInfo fi : ls) {
-                String filePath = fi.getFilePath();
-                int length = getPathDisplayLength(filePath);
-                if (colSize[0] < length) {
-                    colSize[0] = length;
-                }
-            }
-
-            // title
-            System.out.println("----------------------------------------------------------------------------");
-            System.out.printf("%8s | %-" + colSize[0] + "s | %-" + colSize[1] + "s | %-" + colSize[2] + "s | %-" + colSize[3] + "s |%n",
-                    "  No.", "file_path", "  last_modified", "file_size", "             md5sum");
-            for (int k = 0, lsSize = ls.size(); k < lsSize; k++) {
-                FileInfo fi = ls.get(k);
-                int idx = i + k + 1;
-                System.out.printf("%8d | ", idx);
-                String filePath = fi.getFilePath();
-                System.out.printf(filePath);
-                int length = getPathDisplayLength(filePath);
-                int delta = colSize[0] - length;
-                while (delta-- > 0) {
-                    System.out.printf(" ");
-                }
-                System.out.printf(" | %-" + colSize[1] + "s | %" + colSize[2] + "s | %-" + colSize[3] + "s |%n",
-                        sdf.format(fi.getLastModified()), formatSizeForReadBy1024(fi.getFileSize()), fi.getMd5sum());
-            }
-
-            i = j;
-            if (i < fileInfos.size()) {
-                System.out.println("============================================================================");
-                String s = prompt("Continue/Quit?");
-                if ("q".equalsIgnoreCase(s)) {
-                    break;
-                }
-            }
-        } while (i < fileInfos.size());
+        c.commit();
     }
 
-    private static int getPathDisplayLength(String filePath) {
-        int length = 0;
-        char[] chars = filePath.toCharArray();
-        for (char c : chars) {
-            if (c >= 0x4E00) { // 快速检测，不是最精准
-                length += 2;
 
+    public static int insertFileFp(PreparedStatement ps, FileFp... fps) throws SQLException {
+        for (FileFp fp : fps) {
+            ps.setString(1, fp.path());
+            ps.setLong(2, fp.size());
+            ps.setLong(3, fp.mtime());
+            ps.setString(4, fp.quickHash());
+            ps.setString(5, fp.sourceDisk());
+            if (fp.groupId() != null) {
+                ps.setLong(6, fp.groupId());
             } else {
-                length++;
+                ps.setNull(6, Types.BIGINT);
+            }
+            ps.setLong(7, Instant.now().getEpochSecond());
+
+            ps.addBatch();
+        }
+
+        int length = ps.executeBatch().length;
+        ps.getConnection().commit();
+        return length;
+
+    }
+
+    public static Map<String, FileMeta> loadExisting(Connection c) throws SQLException {
+        return query(c, "SELECT path,size,mtime FROM file_fp", rs -> {
+            Map<String, FileMeta> m = new HashMap<>();
+            while (rs.next()) {
+                m.put(rs.getString(1), new FileMeta(rs.getString(1), rs.getLong(2), rs.getLong(3)));
+            }
+            return m;
+        });
+
+    }
+
+    public static long queryWithCallBack(Connection c, String sql, Consumer<ResultSet> consumer)
+            throws SQLException {
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            consumer.accept(rs);
+            return rs.getRow();
+        }
+    }
+
+    public static <T> T query(Connection c, String sql, ResultSetMapper<T> mapper)
+            throws SQLException {
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            return mapper.map(rs);
+        }
+    }
+
+    public static <T> Optional<T> queryOne(Connection c, String sql, ResultSetMapper<T> mapper)
+            throws SQLException {
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            if (rs.next()) {
+                return Optional.of(mapper.map(rs));
+            } else {
+                return Optional.empty();
             }
         }
-        return length;
     }
 
-    private static String prompt(String prompt) throws IOException {
-        Console console = System.console();
-        if (console == null) {
-            System.out.println(prompt);
-            char read = (char) System.in.read();
-            return new String(new char[]{read});
-        } else {
-            return console.readLine();
-        }
-    }
-
-    private static void listTables() {
-        System.out.println("Tables:");
-        List<String> strings = DataSourceFactory.listTables();
-        for (String string : strings) {
-            System.out.println(string);
-        }
-        System.out.println("============================================================================");
-    }
-
-    private static void setVerbose(boolean verbose) {
-        if (verbose) {
-            Log.set(Log.LEVEL_DEBUG);
-        } else {
-            Log.set(Log.LEVEL_INFO);
+    public static <T> List<T> queryList(Connection c, String sql, ResultSetMapper<T> mapper)
+            throws SQLException {
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            List<T> out = new ArrayList<>();
+            while (rs.next()) {
+                out.add(mapper.map(rs));
+            }
+            return out;
         }
     }
 }

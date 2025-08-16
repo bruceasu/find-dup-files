@@ -54,3 +54,20 @@ nbproject
 .CVS
 .idea
 build
+
+# Updated by asu-java-build
+target/
+bin/
+classes/
+build/
+out/
+lib/
+*.jar
+*.war
+*.ear
+*.tmp
+*.bak
+.settings/
+.idea/
+.vscode/
+node_modules/

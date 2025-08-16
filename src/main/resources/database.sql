@@ -1,16 +1,26 @@
+/*
+| 字段          | 说明                       |
+| ----------- | ------------------------ |
+| path        | 绝对路径（主键）                 |
+| size        | 文件大小                     |
+| mtime       | 修改时间                     |
+| quick_hash  | 3 段 hash                 |
+| full_hash   | 可空                       |
+| source_disk | `A-driver / local / xxx` |
+| group_id    | report 阶段生成              |
+*/
 
-create table if not exists $table_name
-(
-    file_path varchar(1024) not null comment 'path',
-    file_ext varchar (64) not null comment 'file extend',
-    md5sum varchar(32) comment 'the md5sum of file',
-    last_modified timestamp comment 'the last modified time of file',
-    file_size bigint comment 'the file size'
+CREATE TABLE IF NOT EXISTS file_fp (
+    path TEXT PRIMARY KEY,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    quick_hash TEXT,
+    full_hash TEXT,
+    source_disk TEXT,
+    group_id INTEGER,
+    updated_at INTEGER NOT NULL
 );
-create index if not exists $table_name_index_md5 on $table_name(md5sum);
-create index if not exists $table_name_index_path on $table_name(file_path);
 
--- alter table fileInfo add (name_lower varchar(100) as lower(name));
--- create index ix_element_add_low on fileInfo (name_lower);
--- select * from fileInfo e where locate (lower(?), lower(e.name));
--- select * from fileInfo e where locate (lower(?), name_lower);
+CREATE INDEX IF NOT EXISTS idx_size_qh ON file_fp(size, quick_hash);
+CREATE INDEX IF NOT EXISTS idx_group ON file_fp(group_id);
+CREATE INDEX IF NOT EXISTS idx_fullhash ON file_fp(full_hash);

@@ -1,6 +1,6 @@
 @echo off
 call :getScriptLocation APP_DIR
-java  -jar %APP_DIR%\find-dup-files.jar %*
+java  -jar %APP_DIR%\fdf.jar %*
 
 :: If this script is in `%PATH%` and called quoted without a full path (e.g., `"js"`), `%~dp0` is expanded to `cwd`
 :: rather than the path to the script.
