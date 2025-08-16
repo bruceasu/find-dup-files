@@ -4,8 +4,11 @@ package me.asu.fdf.dao;
 import me.asu.log.Log;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.*;
 import java.util.ArrayList;
@@ -21,7 +24,16 @@ public class DataSourceFactory {
         } catch (ClassNotFoundException e) {
             // ignore
         }
-        String path = Paths.get(System.getProperty("user.home"), ".local", "share","fdf.file-index").toString();
+        Path p = Paths.get(System.getProperty("user.home"), ".local", "share", "fdf.file-index");
+        Path parent = p.getParent();
+        if (!Files.isDirectory(parent)) {
+            try {
+                Files.createDirectories(parent);
+            } catch (IOException e) {
+                Log.error("Failed to create directory: " + parent);
+            }
+        }
+        String path = p.toString();
         String jdbcUrl = "jdbc:h2:" + path + ";TRACE_LEVEL_FILE=0";
         String username = "";
         String password = "";
