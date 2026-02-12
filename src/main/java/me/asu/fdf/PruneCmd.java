@@ -36,19 +36,18 @@ public class PruneCmd {
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
             case "--db", "-d" -> {
-                if (i + 1 >= args.length) Dedup.usage();
+                if (i + 1 >= args.length) usage();
                 db = args[++i];
             }
             case "--from-disk" -> {
-                if (i + 1 >= args.length) Dedup.usage();
+                if (i + 1 >= args.length) usage();
                 fromDisk = args[++i];
             }
             case "--prefix" -> {
-                if (i + 1 >= args.length) Dedup.usage();
+                if (i + 1 >= args.length) usage();
                 prefix = args[++i];
             }
             case "--dry-run" -> {
-                if (i + 1 >= args.length) Dedup.usage();
                 dryRun = true;
             }
             case "--help", "-h" -> {

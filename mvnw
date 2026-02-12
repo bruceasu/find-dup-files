@@ -69,6 +69,8 @@ case "$(uname)" in
     ;;
 esac
 
+JAVA_HOME=~/apps/jdk-25
+
 if [ -z "$JAVA_HOME" ] ; then
   if [ -r /etc/gentoo-release ] ; then
     JAVA_HOME=$(java-config --jre-home)

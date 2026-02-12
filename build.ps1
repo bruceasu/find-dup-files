@@ -5,7 +5,7 @@ $env:JAVA_HOME = "C:\green\jdk-25.0.1+8"
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
 Write-Host "Building with JDK 25..." -ForegroundColor Cyan
-.\mvnw.cmd clean package -DskipTests
+.\mvnw.cmd package -DskipTests
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`n========================================" -ForegroundColor Green

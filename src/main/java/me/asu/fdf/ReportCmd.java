@@ -17,9 +17,6 @@ import java.util.List;
 public class ReportCmd {
 
     public static void run(String[] args) throws Exception {
-        if (args.length < 1)
-            Dedup.usage();
-
         String db = "cache.db";
         String out = "report.csv";
         String mode = "quick";
@@ -27,15 +24,15 @@ public class ReportCmd {
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--db", "-d" -> {
-                    if (i + 1 >= args.length) Dedup.usage();
+                    if (i + 1 >= args.length) usage();
                     db = args[++i];
                 }
                 case "--out", "-o" -> {
-                    if (i + 1 >= args.length) Dedup.usage();
+                    if (i + 1 >= args.length) usage();
                     out = args[++i];
                 }
                 case "--mode", "-m" -> {
-                    if (i + 1 >= args.length) Dedup.usage();
+                    if (i + 1 >= args.length) usage();
                     mode = args[++i];
                 }
                 case "--help", "-h" -> {
